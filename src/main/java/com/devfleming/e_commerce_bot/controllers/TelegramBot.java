@@ -1,8 +1,11 @@
 package com.devfleming.e_commerce_bot.controllers;
 
 import com.devfleming.e_commerce_bot.domain.dto.ProductDto;
+import com.devfleming.e_commerce_bot.domain.dto.UserDto;
 import com.devfleming.e_commerce_bot.domain.entities.Product;
+import com.devfleming.e_commerce_bot.domain.entities.User;
 import com.devfleming.e_commerce_bot.domain.usecases.ProductService;
+import com.devfleming.e_commerce_bot.domain.usecases.UserService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -18,7 +21,6 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.Keyboard
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,7 +36,12 @@ public class TelegramBot extends TelegramLongPollingBot {
     @Autowired
     private ProductService productService;
 
+    @Autowired
+    private UserService userService;
+
     private ProductDto productDto = new ProductDto();
+
+    private UserDto userDto = new UserDto();
 
     private Map<Long, String> userStates = new HashMap<>();
 
@@ -45,40 +52,84 @@ public class TelegramBot extends TelegramLongPollingBot {
 
     @Override
     public void onUpdateReceived(Update update) {
-        if (update.hasMessage() && update.getMessage().hasText()) {
+        log.info(update.toString());
+        if (update.hasMessage() && update.getMessage().hasText() || update.getMessage().hasContact()) {
             Message message = update.getMessage();
             long chatId = message.getChatId();
             String userMessage = message.getText();
-            SendMessage messageResponse = new SendMessage();
-            messageResponse.setChatId(chatId);
-            messageResponse.setParseMode(ParseMode.HTML);
+            SendMessage sendMessage = new SendMessage();
+            sendMessage.setChatId(chatId);
+            sendMessage.setParseMode(ParseMode.HTML);
 
             // Lógica para responder com base na mensagem do usuário
             String responseMessage;
 
             // Verifica o estado atual do usuário
-            String currentState = userStates.getOrDefault(chatId, "START");
+            String currentState = userStates.getOrDefault(chatId, "LOGIN");
 
             // Dependendo do estado, o bot reage de maneira diferente
             switch (currentState) {
-                case "START":
-                    responseMessage = "Olá! Selecione uma das opções abaixo";
-                    messageResponse.setText(responseMessage);
-                    messageResponse.setReplyMarkup(replyKeyboardMarkup(chatId));
-                    userStates.put(chatId, "MENU");
+                case "LOGIN":
+                    responseMessage = "Olá. Deseja compartilhar seu número e nome para fazer o login?";
+                    sendMessage.setText(responseMessage);
+                    sendMessage.setReplyMarkup(loginKeyboardMarkup());
+                    userStates.put(chatId, "WAITING FOR CELLPHONE NUMBER");
+                    break;
+                case "WAITING FOR CELLPHONE NUMBER":
+                    if (update.getMessage().hasContact()) {
+                        String phoneNumber = update.getMessage().getContact().getPhoneNumber();
+                        User user = userService.fetchByCellphone(phoneNumber);
+
+                        if (user != null) {
+                            responseMessage = String.format("Seja bem vindo %s %s!\nSelecione uma das opções abaixo:", user.getFirstName(), user.getLastName());
+                            sendMessage.setText(responseMessage);
+                            sendMessage.setReplyMarkup(replyKeyboardMarkup());
+                            userStates.put(chatId, "MENU");
+                            break;
+                        } else {
+                            userDto.setFirstName(message.getContact().getFirstName());
+                            userDto.setLastName(message.getContact().getLastName());
+                            userDto.setCellphone(phoneNumber);
+                            responseMessage = "Qual é o seu CPF? (Digite apenas números)";
+                            sendMessage.setText(responseMessage);
+                            userStates.put(chatId, "WAITING FOR CPF");
+                            break;
+                        }
+                    } else {
+                        // Caso o usuário não tenha compartilhado o número, enviar uma mensagem de erro
+                        responseMessage = "Para utilizar o bot, você deve compartilhar seu numero de telefone.";
+                        sendMessage.setText(responseMessage);
+                        sendMessage.setReplyMarkup(loginKeyboardMarkup());  // Reenviar o botão para o compartilhamento do número
+                        userStates.put(chatId, "WAITING FOR CELLPHONE NUMBER");
+                    }
+                    break;
+                case "WAITING FOR CPF":
+                    if (userService.fetchByCpf(message.getText()) == null){
+                        userDto.setCpf(message.getText());
+                        userService.createNewUser(userDto);
+                        responseMessage = "Seu usuário foi criado com sucesso!\nSelecione uma das opções abaixo.";
+                        sendMessage.setText(responseMessage);
+                        sendMessage.setReplyMarkup(replyKeyboardMarkup());
+                        userStates.put(chatId, "MENU");
+                    }else {
+                        responseMessage = "Este CPF já está cadastrado em outro número. Tente novamente com outro CPF.";
+                        sendMessage.setText(responseMessage);
+                        sendMessage.setReplyMarkup(loginKeyboardMarkup());
+                        userStates.put(chatId, "WAITING FOR CELLPHONE NUMBER");
+                    }
                     break;
                 case "MENU":
                     switch (userMessage){
                         case "Cadastrar Produto":
                             responseMessage = "Qual é o nome do produto?";
-                            messageResponse.setText(responseMessage);
+                            sendMessage.setText(responseMessage);
                             userStates.put(chatId,"PRODUCT NAME");
                             break;
                         case "Listar Produtos":
                             List<Product> productList = productService.fetchProductsList();
                             if (productList.isEmpty()){
                                 responseMessage = "Não existe nenhum produto cadastrado!";
-                                messageResponse.setText(responseMessage);
+                                sendMessage.setText(responseMessage);
                                 userStates.put(chatId, "START");
                                 break;
                             }
@@ -90,19 +141,19 @@ public class TelegramBot extends TelegramLongPollingBot {
                                         product.getProductDescription(),
                                         product.getProductType()));
                             }
-                            messageResponse.setText(String.valueOf(stringBuilder));
-                            messageResponse.setReplyMarkup(replyKeyboardMarkup(chatId));
+                            sendMessage.setText(String.valueOf(stringBuilder));
+                            sendMessage.setReplyMarkup(replyKeyboardMarkup());
                             userStates.put(chatId,"MENU");
                             break;
                         case "Procurar Produto":
                             responseMessage = "Digite o ID do produto que procura.";
-                            messageResponse.setText(responseMessage);
+                            sendMessage.setText(responseMessage);
                             userStates.put(chatId, "WAITING PRODUCT ID");
                             break;
                         default:
                             responseMessage = "Não entendi o que você disse. Tente novamente.";
-                            messageResponse.setText(responseMessage);
-                            messageResponse.setReplyMarkup(replyKeyboardMarkup(chatId));
+                            sendMessage.setText(responseMessage);
+                            sendMessage.setReplyMarkup(replyKeyboardMarkup());
                             userStates.put(chatId, "MENU");
                             break;
                     }
@@ -110,13 +161,13 @@ public class TelegramBot extends TelegramLongPollingBot {
                 case "PRODUCT NAME":
                     productDto.setProductName(userMessage);
                     responseMessage = "Dê uma descrição do seu produto.";
-                    messageResponse.setText(responseMessage);
+                    sendMessage.setText(responseMessage);
                     userStates.put(chatId, "PRODUCT DESCRIPTION");
                     break;
                 case "PRODUCT DESCRIPTION":
                     productDto.setProductDescription(userMessage);
                     responseMessage = "E qual o tipo de produto que está sendo cadastrado?";
-                    messageResponse.setText(responseMessage);
+                    sendMessage.setText(responseMessage);
                     userStates.put(chatId, "PRODUCT TYPE");
                     break;
                 case "PRODUCT TYPE":
@@ -124,19 +175,19 @@ public class TelegramBot extends TelegramLongPollingBot {
                     Product product = productService.createNewProduct(productDto);
                     if (product != null){
                         responseMessage = "Seu produto foi salvo com sucesso.";
-                        messageResponse.setText(responseMessage);
-                        messageResponse.setReplyMarkup(replyKeyboardMarkup(chatId));
+                        sendMessage.setText(responseMessage);
+                        sendMessage.setReplyMarkup(replyKeyboardMarkup());
                         userStates.put(chatId, "MENU");
                     }else {
                         responseMessage = "Houve uma falha durante a persistência. Por favor, tente novamente ou contate os desenvolvedores.";
-                        messageResponse.setText(responseMessage);
-                        messageResponse.setReplyMarkup(replyKeyboardMarkup(chatId));
+                        sendMessage.setText(responseMessage);
+                        sendMessage.setReplyMarkup(replyKeyboardMarkup());
                         userStates.put(chatId, "MENU");
                     }
                     break;
                 case "WAITING PRODUCT ID":
                     Product savedProduct = productService.fetchSingleProductById(Long.parseLong(userMessage));
-                    messageResponse.setText(String.format("ID:%d\nNome do Produto: %s\nDescrição: %s\nTipo: %s\n\n",
+                    sendMessage.setText(String.format("ID:%d\nNome do Produto: %s\nDescrição: %s\nTipo: %s\n\n",
                             savedProduct.getProductId(),
                             savedProduct.getProductName(),
                             savedProduct.getProductDescription(),
@@ -145,21 +196,43 @@ public class TelegramBot extends TelegramLongPollingBot {
                     break;
                 default:
                     responseMessage = "Estou aqui para te ajudar!";
-                    messageResponse.setText(responseMessage);
-                    messageResponse.setReplyMarkup(replyKeyboardMarkup(chatId));
+                    sendMessage.setText(responseMessage);
+                    sendMessage.setReplyMarkup(replyKeyboardMarkup());
                     userStates.put(chatId, "MENU");  // Reseta o estado
                     break;
             }
 
             try {
-                execute(messageResponse);
+                execute(sendMessage);
             } catch (TelegramApiException e) {
                 e.printStackTrace();
             }
         }
     }
 
-    public ReplyKeyboardMarkup replyKeyboardMarkup(Long chatId){
+    public void processMessage(Message message){
+
+    }
+
+    public ReplyKeyboardMarkup loginKeyboardMarkup(){
+        KeyboardButton firstButton = new KeyboardButton("Não");
+
+        KeyboardButton secondButton = new KeyboardButton("Sim");
+
+        secondButton.setRequestContact(true);
+
+        KeyboardRow firstRow = new KeyboardRow(List.of(firstButton, secondButton));
+
+        ReplyKeyboardMarkup replyKeyboardMarkup = new ReplyKeyboardMarkup(List.of(firstRow));
+
+        replyKeyboardMarkup.setSelective(true);
+        replyKeyboardMarkup.setOneTimeKeyboard(false);
+        replyKeyboardMarkup.setResizeKeyboard(true);
+
+        return replyKeyboardMarkup;
+    }
+
+    public ReplyKeyboardMarkup replyKeyboardMarkup(){
         KeyboardButton firstButton = new KeyboardButton("Cadastrar Produto");
 
         KeyboardButton secondButton = new KeyboardButton("Listar Produtos");
