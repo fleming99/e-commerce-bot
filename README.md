@@ -26,7 +26,7 @@ O sistema permite as seguintes interações:
 - **Cadastrar Produtos**: Cadastro de produtos.
 - **Listar Produtos**: Obtem uma listagem de produtos.
 - **Procurar Produtos por ID**: Obtem um único produto pesquisando por ID.
-- **Inativar Produto**: Implementação futura, que irá inativar um produto.
+- **Inativar Produto**: Inativa um produto pelo seu ID.
 
 ## Estrutura do Projeto
 
