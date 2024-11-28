@@ -27,4 +27,7 @@ public class Product {
 
     @Column(name = "product_type", length = 50, nullable = false)
     private String productType;
+
+    @Column(name = "active", length = 1, nullable = false)
+    private char active;
 }
