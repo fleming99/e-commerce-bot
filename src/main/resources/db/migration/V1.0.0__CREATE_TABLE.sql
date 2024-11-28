@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS products(
     product_name VARCHAR(50) NOT NULL,
     product_description VARCHAR(100) NOT NULL,
     product_type VARCHAR(50) NOT NULL,
+    active CHAR NOT NULL,
     CONSTRAINT uq_product_id UNIQUE (product_id)
 );
 
