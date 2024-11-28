@@ -25,6 +25,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static com.devfleming.e_commerce_bot.mappers.ListMapper.mapListToStringBuilder;
+
 @Slf4j
 @Data
 @RequiredArgsConstructor
@@ -38,6 +40,8 @@ public class TelegramBot extends TelegramLongPollingBot {
 
     @Autowired
     private UserService userService;
+    
+    private SendMessage sendMessage = new SendMessage();
 
     private ProductDto productDto = new ProductDto();
 
@@ -52,169 +56,295 @@ public class TelegramBot extends TelegramLongPollingBot {
 
     @Override
     public void onUpdateReceived(Update update) {
-        log.info(update.toString());
+
+        setSendMessageConfig(update.getMessage());
+
         if (update.hasMessage() && update.getMessage().hasText() || update.getMessage().hasContact()) {
-            Message message = update.getMessage();
-            long chatId = message.getChatId();
-            String userMessage = message.getText();
-            SendMessage sendMessage = new SendMessage();
-            sendMessage.setChatId(chatId);
-            sendMessage.setParseMode(ParseMode.HTML);
 
-            // Lógica para responder com base na mensagem do usuário
-            String responseMessage;
+            String currentState = userStates.getOrDefault(update.getMessage().getChatId(), "LOGIN");
 
-            // Verifica o estado atual do usuário
-            String currentState = userStates.getOrDefault(chatId, "LOGIN");
-
-            // Dependendo do estado, o bot reage de maneira diferente
-            switch (currentState) {
-                case "LOGIN":
-                    responseMessage = "Olá. Deseja compartilhar seu número e nome para fazer o login?";
-                    sendMessage.setText(responseMessage);
-                    sendMessage.setReplyMarkup(loginKeyboardMarkup());
-                    userStates.put(chatId, "WAITING FOR CELLPHONE NUMBER");
-                    break;
-                case "WAITING FOR CELLPHONE NUMBER":
-                    if (update.getMessage().hasContact()) {
-                        String phoneNumber = update.getMessage().getContact().getPhoneNumber();
-                        User user = userService.fetchByCellphone(phoneNumber);
-
-                        if (user != null) {
-                            responseMessage = String.format("Seja bem vindo %s %s!\nSelecione uma das opções abaixo:", user.getFirstName(), user.getLastName());
-                            sendMessage.setText(responseMessage);
-                            sendMessage.setReplyMarkup(replyKeyboardMarkup());
-                            userStates.put(chatId, "MENU");
-                            break;
-                        } else {
-                            userDto.setFirstName(message.getContact().getFirstName());
-                            userDto.setLastName(message.getContact().getLastName());
-                            userDto.setCellphone(phoneNumber);
-                            responseMessage = "Qual é o seu CPF? (Digite apenas números)";
-                            sendMessage.setText(responseMessage);
-                            userStates.put(chatId, "WAITING FOR CPF");
-                            break;
-                        }
-                    } else {
-                        // Caso o usuário não tenha compartilhado o número, enviar uma mensagem de erro
-                        responseMessage = "Para utilizar o bot, você deve compartilhar seu numero de telefone.";
-                        sendMessage.setText(responseMessage);
-                        sendMessage.setReplyMarkup(loginKeyboardMarkup());  // Reenviar o botão para o compartilhamento do número
-                        userStates.put(chatId, "WAITING FOR CELLPHONE NUMBER");
-                    }
-                    break;
-                case "WAITING FOR CPF":
-                    if (userService.fetchByCpf(message.getText()) == null){
-                        userDto.setCpf(message.getText());
-                        userService.createNewUser(userDto);
-                        responseMessage = "Seu usuário foi criado com sucesso!\nSelecione uma das opções abaixo.";
-                        sendMessage.setText(responseMessage);
-                        sendMessage.setReplyMarkup(replyKeyboardMarkup());
-                        userStates.put(chatId, "MENU");
-                    }else {
-                        responseMessage = "Este CPF já está cadastrado em outro número. Tente novamente com outro CPF.";
-                        sendMessage.setText(responseMessage);
-                        sendMessage.setReplyMarkup(loginKeyboardMarkup());
-                        userStates.put(chatId, "WAITING FOR CELLPHONE NUMBER");
-                    }
-                    break;
-                case "MENU":
-                    switch (userMessage){
-                        case "Cadastrar Produto":
-                            responseMessage = "Qual é o nome do produto?";
-                            sendMessage.setText(responseMessage);
-                            userStates.put(chatId,"PRODUCT NAME");
-                            break;
-                        case "Listar Produtos":
-                            List<Product> productList = productService.fetchProductsList();
-                            if (productList.isEmpty()){
-                                responseMessage = "Não existe nenhum produto cadastrado!";
-                                sendMessage.setText(responseMessage);
-                                userStates.put(chatId, "START");
-                                break;
-                            }
-                            StringBuilder stringBuilder = new StringBuilder();
-                            for (Product product : productList){
-                                stringBuilder.append(String.format("ID:%d\nNome do Produto: %s\nDescrição: %s\nTipo: %s\n\n",
-                                        product.getProductId(),
-                                        product.getProductName(),
-                                        product.getProductDescription(),
-                                        product.getProductType()));
-                            }
-                            sendMessage.setText(String.valueOf(stringBuilder));
-                            sendMessage.setReplyMarkup(replyKeyboardMarkup());
-                            userStates.put(chatId,"MENU");
-                            break;
-                        case "Procurar Produto":
-                            responseMessage = "Digite o ID do produto que procura.";
-                            sendMessage.setText(responseMessage);
-                            userStates.put(chatId, "WAITING PRODUCT ID");
-                            break;
-                        default:
-                            responseMessage = "Não entendi o que você disse. Tente novamente.";
-                            sendMessage.setText(responseMessage);
-                            sendMessage.setReplyMarkup(replyKeyboardMarkup());
-                            userStates.put(chatId, "MENU");
-                            break;
-                    }
-                    break;
-                case "PRODUCT NAME":
-                    productDto.setProductName(userMessage);
-                    responseMessage = "Dê uma descrição do seu produto.";
-                    sendMessage.setText(responseMessage);
-                    userStates.put(chatId, "PRODUCT DESCRIPTION");
-                    break;
-                case "PRODUCT DESCRIPTION":
-                    productDto.setProductDescription(userMessage);
-                    responseMessage = "E qual o tipo de produto que está sendo cadastrado?";
-                    sendMessage.setText(responseMessage);
-                    userStates.put(chatId, "PRODUCT TYPE");
-                    break;
-                case "PRODUCT TYPE":
-                    productDto.setProductType(userMessage);
-                    Product product = productService.createNewProduct(productDto);
-                    if (product != null){
-                        responseMessage = "Seu produto foi salvo com sucesso.";
-                        sendMessage.setText(responseMessage);
-                        sendMessage.setReplyMarkup(replyKeyboardMarkup());
-                        userStates.put(chatId, "MENU");
-                    }else {
-                        responseMessage = "Houve uma falha durante a persistência. Por favor, tente novamente ou contate os desenvolvedores.";
-                        sendMessage.setText(responseMessage);
-                        sendMessage.setReplyMarkup(replyKeyboardMarkup());
-                        userStates.put(chatId, "MENU");
-                    }
-                    break;
-                case "WAITING PRODUCT ID":
-                    Product savedProduct = productService.fetchSingleProductById(Long.parseLong(userMessage));
-                    sendMessage.setText(String.format("ID:%d\nNome do Produto: %s\nDescrição: %s\nTipo: %s\n\n",
-                            savedProduct.getProductId(),
-                            savedProduct.getProductName(),
-                            savedProduct.getProductDescription(),
-                            savedProduct.getProductType()));
-                    userStates.put(chatId, "MENU");
-                    break;
-                default:
-                    responseMessage = "Estou aqui para te ajudar!";
-                    sendMessage.setText(responseMessage);
-                    sendMessage.setReplyMarkup(replyKeyboardMarkup());
-                    userStates.put(chatId, "MENU");  // Reseta o estado
-                    break;
-            }
-
-            try {
-                execute(sendMessage);
-            } catch (TelegramApiException e) {
-                e.printStackTrace();
-            }
+            processMessage(update.getMessage(), currentState);
         }
     }
 
-    public void processMessage(Message message){
-
+    public void processMessage(Message message, String currentState){
+        switch (currentState) {
+            case "LOGIN":
+                handleWelcomeMessage(message);
+                break;
+            case "WAITING FOR CELLPHONE NUMBER":
+                handleLogin(message);
+                break;
+            case "WAITING FOR CPF":
+                handleSecondStepSignup(message);
+                break;
+            case "MENU":
+                handleMenu(message);
+                break;
+            case "PRODUCT NAME":
+                handleNewProductFirstStep(message);
+                break;
+            case "PRODUCT DESCRIPTION":
+                handleNewProductSecondStep(message);
+                break;
+            case "PRODUCT TYPE":
+                handleNewProductThirdStep(message);
+                break;
+            case "WAITING PRODUCT ID TO FETCH":
+                handleFetchProductById(message);
+                break;
+            case "WAITING PRODUCT ID TO INACTIVATE":
+                handleInactivateProductById(message);
+                break;
+            default:
+                handleDefaultMessage(message);
+                break;
+        }
     }
 
-    public ReplyKeyboardMarkup loginKeyboardMarkup(){
+    public void handleWelcomeMessage(Message message){
+
+        sendMessage.setText("Olá. Deseja compartilhar seu número e nome para fazer o login?");
+        sendMessage.setReplyMarkup(loginButtons());
+        userStates.put(message.getChatId(), "WAITING FOR CELLPHONE NUMBER");
+
+        try{
+            execute(sendMessage);
+        } catch (TelegramApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public void handleLogin(Message message){
+
+        if (message.hasContact()) {
+            String phoneNumber = message.getContact().getPhoneNumber();
+            User user = userService.fetchByCellphone(phoneNumber);
+
+            if (user != null) {
+                sendMessage.setText(String.format("Seja bem vindo %s %s!\nSelecione uma das opções abaixo:", user.getFirstName(), user.getLastName()));
+                sendMessage.setReplyMarkup(menuButtons());
+                userStates.put(message.getChatId(), "MENU");
+            } else {
+                handleFirstStepSignup(message, phoneNumber);
+            }
+        } else {
+            sendMessage.setText("Para utilizar o bot, você deve compartilhar seu numero de telefone.");
+            sendMessage.setReplyMarkup(loginButtons());  // Reenviar o botão para o compartilhamento do número
+            userStates.put(message.getChatId(), "WAITING FOR CELLPHONE NUMBER");
+        }
+
+        try{
+            execute(sendMessage);
+        } catch (TelegramApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public void handleReturnToMenu(Message message){
+        sendMessage.setText("Selecione uma das opções abaixo:");
+        sendMessage.setReplyMarkup(menuButtons());
+        userStates.put(message.getChatId(), "MENU");
+
+        try{
+            execute(sendMessage);
+        } catch (TelegramApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public void handleFirstStepSignup(Message message, String phoneNumber){
+
+        userDto.setFirstName(message.getContact().getFirstName());
+        userDto.setLastName(message.getContact().getLastName());
+        userDto.setCellphone(phoneNumber);
+        sendMessage.setText("Qual é o seu CPF? (Digite apenas números)");
+        sendMessage.setReplyMarkup(null);
+        userStates.put(message.getChatId(), "WAITING FOR CPF");
+    }
+
+    public void handleSecondStepSignup(Message message){
+
+        if (userService.fetchByCpf(message.getText()) == null){
+            userDto.setCpf(message.getText());
+            userService.createNewUser(userDto);
+            sendMessage.setText("Seu usuário foi criado com sucesso!\nSelecione uma das opções abaixo.");
+            sendMessage.setReplyMarkup(menuButtons());
+            userStates.put(message.getChatId(), "MENU");
+        }else {
+            sendMessage.setText("Este CPF já está cadastrado em outro número. Tente novamente com outro CPF.");
+            sendMessage.setReplyMarkup(loginButtons());
+            userStates.put(message.getChatId(), "WAITING FOR CELLPHONE NUMBER");
+        }
+
+        try{
+            execute(sendMessage);
+        } catch (TelegramApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public void handleMenu(Message message){
+        switch (message.getText()){
+            case "Cadastrar Produto":
+                sendMessage.setText("Qual é o nome do produto?");
+                userStates.put(message.getChatId(),"PRODUCT NAME");
+                break;
+            case "Listar Produtos":
+                List<Product> productList = productService.fetchProductsList();
+                if (productList.isEmpty() || mapListToStringBuilder(productList).isEmpty()){
+                    sendMessage.setText("Não existe nenhum produto cadastrado/ativo!");
+                    sendMessage.setReplyMarkup(menuButtons());
+                    userStates.put(message.getChatId(), "MENU");
+                    break;
+                }
+                sendMessage.setText(String.valueOf(mapListToStringBuilder(productList)));
+                sendMessage.setReplyMarkup(menuButtons());
+                userStates.put(message.getChatId(), "MENU");
+                break;
+            case "Procurar Produto":
+                sendMessage.setText("Digite o ID do produto que procura.");
+                userStates.put(message.getChatId(), "WAITING PRODUCT ID TO FETCH");
+                break;
+            case "Inativar Produto":
+                sendMessage.setText("Digite o ID do produto que deseja inativar.");
+                userStates.put(message.getChatId(), "WAITING PRODUCT ID TO INACTIVATE");
+                break;
+            default:
+                sendMessage.setText("Não entendi o que você disse. Tente novamente.");
+                sendMessage.setReplyMarkup(menuButtons());
+                userStates.put(message.getChatId(), "MENU");
+                break;
+        }
+
+        try{
+            execute(sendMessage);
+        } catch (TelegramApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public void handleNewProductFirstStep(Message message){
+        productDto.setProductName(message.getText());
+        sendMessage.setText("Dê uma descrição do seu produto.");
+        sendMessage.setReplyMarkup(null);
+        userStates.put(message.getChatId(), "PRODUCT DESCRIPTION");
+
+        try{
+            execute(sendMessage);
+        } catch (TelegramApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public void handleNewProductSecondStep(Message message){
+        productDto.setProductDescription(message.getText());
+        sendMessage.setText("E qual o tipo de produto que está sendo cadastrado?");
+        sendMessage.setReplyMarkup(null);
+        userStates.put(message.getChatId(), "PRODUCT TYPE");
+
+        try{
+            execute(sendMessage);
+        } catch (TelegramApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public void handleNewProductThirdStep(Message message){
+        productDto.setProductType(message.getText());
+        Product product = productService.createNewProduct(productDto);
+        if (product != null){
+            sendMessage.setText("Seu produto foi salvo com sucesso.");
+        }else {
+            sendMessage.setText("Houve uma falha durante a persistência. Por favor, tente novamente ou contate os desenvolvedores.");
+        }
+        sendMessage.setReplyMarkup(menuButtons());
+        userStates.put(message.getChatId(), "MENU");
+
+        try{
+            execute(sendMessage);
+        } catch (TelegramApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public void handleFetchProductById(Message message){
+
+
+        try {
+            Product savedProduct = productService.fetchSingleProductById(Long.parseLong(message.getText()));
+
+            if (savedProduct.getActive() == 'A') {
+                sendMessage.setText(String.format("ID:%d\nNome do Produto: %s\nDescrição: %s\nTipo: %s\n\n",
+                        savedProduct.getProductId(),
+                        savedProduct.getProductName(),
+                        savedProduct.getProductDescription(),
+                        savedProduct.getProductType()));
+                userStates.put(message.getChatId(), "MENU");
+            }else {
+                sendMessage.setText("Não foi possível obter informações sobre este produto, pois ele está inativo.");
+                userStates.put(message.getChatId(), "MENU");
+            }
+            try{
+                execute(sendMessage);
+            } catch (TelegramApiException e) {
+                throw new RuntimeException(e);
+            }
+        } catch (NumberFormatException e) {
+            sendMessage.setText("Não foi possível encontrar o produto.\nLembre-se de digitar apenas números!");
+            try{
+                execute(sendMessage);
+            } catch (TelegramApiException ex) {
+                throw new RuntimeException(ex);
+            }
+
+            handleReturnToMenu(message);
+        }
+    }
+
+    public void handleInactivateProductById(Message message){
+
+        try {
+            Product savedProduct = productService.fetchSingleProductById(Long.parseLong(message.getText()));
+
+            if (savedProduct.getActive() == 'A') {
+                productService.inactivateProductById(savedProduct.getProductId());
+                sendMessage.setText("Produto inativado com sucesso.");
+                userStates.put(message.getChatId(), "MENU");
+            }else {
+                sendMessage.setText("O produto já está inativo.");
+                userStates.put(message.getChatId(), "MENU");
+            }
+            try{
+                execute(sendMessage);
+            } catch (TelegramApiException e) {
+                throw new RuntimeException(e);
+            }
+        } catch (NumberFormatException e) {
+            sendMessage.setText("Não foi possível encontrar o produto para inativar.\nLembre-se de digitar apenas números!");
+            try{
+                execute(sendMessage);
+            } catch (TelegramApiException ex) {
+                throw new RuntimeException(ex);
+            }
+
+            handleReturnToMenu(message);
+        }
+    }
+
+    public void handleDefaultMessage(Message message){
+        sendMessage.setText("Não entendi a mensagem anterior. Vamos tentar novamente.");
+        sendMessage.setReplyMarkup(menuButtons());
+        userStates.put(message.getChatId(), "MENU");
+
+        try{
+            execute(sendMessage);
+        } catch (TelegramApiException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ReplyKeyboardMarkup loginButtons(){
         KeyboardButton firstButton = new KeyboardButton("Não");
 
         KeyboardButton secondButton = new KeyboardButton("Sim");
@@ -232,7 +362,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         return replyKeyboardMarkup;
     }
 
-    public ReplyKeyboardMarkup replyKeyboardMarkup(){
+    public ReplyKeyboardMarkup menuButtons(){
         KeyboardButton firstButton = new KeyboardButton("Cadastrar Produto");
 
         KeyboardButton secondButton = new KeyboardButton("Listar Produtos");
@@ -241,7 +371,7 @@ public class TelegramBot extends TelegramLongPollingBot {
 
         KeyboardButton thirdButton = new KeyboardButton("Procurar Produto");
 
-        KeyboardButton fourthButton = new KeyboardButton("Invativar Produto");
+        KeyboardButton fourthButton = new KeyboardButton("Inativar Produto");
 
         KeyboardRow secondRow = new KeyboardRow(List.of(thirdButton, fourthButton));
 
@@ -256,5 +386,10 @@ public class TelegramBot extends TelegramLongPollingBot {
     @Override
     public String getBotUsername() {
         return this.botName;
+    }
+
+    public void setSendMessageConfig(Message message){
+        sendMessage.setChatId(message.getChatId());
+        sendMessage.setParseMode(ParseMode.HTML);
     }
 }
