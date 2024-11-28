@@ -20,7 +20,9 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     public Product createNewProduct(ProductDto productDto) {
-        return productRepository.save(ProductMapper.mapToProduct(productDto));
+        Product product = ProductMapper.mapToProduct(productDto);
+        product.setActive('A');
+        return productRepository.save(product);
     }
 
     @Override
@@ -36,6 +38,10 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     public void inactivateProductById(Long productId) {
+        Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new RuntimeException("Cannot find the product by id: " + productId));
 
+        product.setActive('I');
+        productRepository.save(product);
     }
 }
